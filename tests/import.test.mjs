@@ -26,6 +26,8 @@ test("imports all 5 CSVs, normalizes timestamps and makes correct joins", async 
       assert.equal(first.recorded_at, "2015-01-01T06:00:00");
       const results = db.prepare("SELECT e.error_code FROM errors e JOIN machines m USING(machine_id) WHERE m.machine_id = 1").all();
       assert.deepEqual(results.map((x) => x.error_code), ["error1"]);
+      const manufacturingTables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('manufacturing_lots', 'wafers', 'operators', 'wafer_processing', 'operator_incident_notes')").all();
+      assert.equal(manufacturingTables.length, 5);
     } finally { db.close(); }
   } finally { await rm(tmp, { recursive: true, force: true }); }
 });
