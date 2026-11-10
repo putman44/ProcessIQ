@@ -17,7 +17,9 @@
     "db:verify": "node scripts/verify-db.mjs",
     "test": "node --test tests/*.test.mjs",
     "eval:offline": "node scripts/evaluate.mjs offline",
-    "eval:live": "node scripts/evaluate.mjs live"
+    "eval:live": "node scripts/evaluate.mjs live",
+    "eval:v2:offline": "node scripts/evaluate-v2.mjs offline",
+    "eval:v2:live": "node scripts/evaluate-v2.mjs live"
   },
   "dependencies": {
     "next": "^16.0.0",

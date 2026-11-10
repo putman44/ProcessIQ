@@ -260,6 +260,47 @@ test("rejects confirmed-defect claims", async () => fixture(async path => {
   await assert.rejects(investigate("Is the wafer defective?", defect.client, path), /Unsupported causal/);
 }));
 
+test("distinguishes denied conclusions from affirmative defect and causation claims", async () => fixture(async path => {
+  const evidence = [{ source_type: "error", source_id: "1" }];
+  for (const answer of [
+    "The error confirmed the wafer was defective.",
+    "The equipment failure definitely caused wafer damage.",
+    "There is uncertainty. The error confirmed a defect.",
+    "The error does not confirm a defect. The failure definitely caused wafer damage.",
+    "No proven causation is shown and the error definitely caused wafer damage.",
+  ]) {
+    const { client } = mock([response([call("getMachineEvents")]), response(), final(answer, evidence)]);
+    await assert.rejects(investigate("Assess Machine 1 and wafer quality.", client, path), /Unsupported causal or defect conclusion/, answer);
+  }
+  for (const answer of [
+    "The error does not confirm a defect.",
+    "Temporal overlap cannot establish causation.",
+    "This is not a confirmed defect; there is no proven causation.",
+    "We cannot confirm a defect.",
+  ]) {
+    const { client } = mock([response([call("getMachineEvents")]), response(), final(answer, evidence)]);
+    assert.equal((await investigate("Assess Machine 1 and wafer quality.", client, path)).answer, answer);
+  }
+}));
+
+test("defect safety questions can cite machine and wafer context without claiming quality impact", async () => fixture(async path => {
+  const evidence = [
+    { source_type: "error", source_id: "1" },
+    { source_type: "synthetic_processing", source_id: "SYN-PROC-00001" },
+  ];
+  for (const question of [
+    "Did the Machine 1 error prove SYN-WAF-00001 was defective?",
+    "Can the Machine 1 error establish a defect in the named wafer?",
+    "Is wafer quality damage confirmed by the Machine 1 error?",
+  ]) {
+    const answer = "Machine 1 recorded an error during the synthetic processing step. The error does not confirm a defect.";
+    const { client } = mock([response([call("getMachineEvents"), call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(), final(answer, evidence)]);
+    const result = await investigate(question, client, path);
+    assert.deepEqual(result.evidence.map(e => e.source_type), ["error", "synthetic_processing"]);
+    assert.deepEqual(result.exposure_findings, []);
+  }
+}));
+
 test("wafer history removes an unverified exposure finding while retaining processing evidence", async () => fixture(async path => {
   const historyCall = call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }));
   const inventedFinding = final("SYN-WAF-00001 was potentially exposed.",
