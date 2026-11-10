@@ -27,6 +27,12 @@ function one(db: DatabaseSync, sql: string, ...params: (string | number)[]): Row
   return db.prepare(sql).get(...params) as Row | undefined;
 }
 
+export function listMachines(dbPath = resolve("data/processiq.sqlite")) {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try { return rows(db, "SELECT machine_id, model, age FROM machines ORDER BY machine_id"); }
+  finally { db.close(); }
+}
+
 /** Open a local SQLite database in read-only mode; close the returned handle when done. */
 export function openInvestigation(dbPath = resolve("data/processiq.sqlite")) {
   const db = new DatabaseSync(dbPath, { readOnly: true });

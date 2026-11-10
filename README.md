@@ -4,7 +4,7 @@
 
 ## Data foundation
 
-The project includes a Next.js + TypeScript homepage, SQLite schema, public-dataset downloader, atomic CSV importer, deterministic wafer generator, six read-only investigation tools, an OpenAI tool-calling API, validation scripts, and automated tests.
+The project includes a Next.js + TypeScript investigation dashboard, SQLite schema, public-dataset downloader, atomic CSV importer, deterministic wafer generator, six read-only investigation tools, an OpenAI tool-calling API, validation scripts, and automated tests.
 
 ### Requirements
 
@@ -25,7 +25,11 @@ npm run dev
 
 Then visit http://localhost:3000.
 
-For the investigation API, copy `.env.example` to `.env.local`, set `OPENAI_API_KEY` to your key, and optionally change `OPENAI_MODEL` (default `gpt-4.1-mini`). Both variables are server-side; `.env.local` is gitignored. Restart the dev server after changing them. The homepage is still a placeholder; use the API directly.
+Open the dashboard at http://localhost:3000. It starts with Machine 1 and the window `2015-01-03T06:30:00` through `2015-01-03T08:00:00`. Select a machine or change the source-local start and end times to load telemetry, source events, and overlapping synthetic wafer processing. Click a wafer ID to see its complete processing history. The dashboard reads local SQLite data without an OpenAI key. Windows are start-inclusive and end-exclusive, and the source timezone is unspecified. Telemetry column units are not declared by the source files, so the charts label them as unspecified.
+
+To use the **Investigate** button, copy `.env.example` to `.env.local`, set `OPENAI_API_KEY` to your key, and optionally change `OPENAI_MODEL` (default `gpt-4.1-mini`). Both variables are server-side; `.env.local` is gitignored. Restart the dev server after changing them. An AI request occurs only after clicking the button. Results show the answer, linked evidence, structured exposure findings, uncertainty, and tool-use details. Potential exposure never establishes a wafer defect.
+
+Read-only dashboard endpoints are `GET /api/dashboard/machines`, `GET /api/dashboard/overview?machineId=1&startTime=2015-01-03T06%3A30%3A00&endTime=2015-01-03T08%3A00%3A00`, and `GET /api/dashboard/wafers/SYN-WAF-00001`. The wafer detail endpoint returns 404 if that ID is absent from the current database.
 
 If the Azure download is unavailable, manually place the following five files in `data/raw/` and run `npm run db:import`:
 
