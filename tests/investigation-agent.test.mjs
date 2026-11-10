@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -154,6 +154,8 @@ test("repairs two separate wafer exposures with their own processing and event c
   ]);
   const result = await investigate("Investigate two Machine 1 errors and affected wafers", client, path);
   assert.deepEqual(result.exposure_findings, [exposure, second]);
+  assert.match(result.answer, /SYN-WAF-00001 processing SYN-PROC-00001 overlapped equipment error code error1 \(database event ID 1\)/);
+  assert.match(result.answer, /SYN-WAF-00002 processing SYN-PROC-00002 overlapped equipment error code error2 \(database event ID 2\)/);
   assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`), [
     "synthetic_processing:SYN-PROC-00001", "error:1",
     "synthetic_processing:SYN-PROC-00002", "error:2",
@@ -352,6 +354,109 @@ test("empty event window rejects unrelated telemetry and permits an uncited abse
   const result = await investigate("Were any Machine 1 errors or maintenance recorded from 08:00 to 09:00?", client, path);
   assert.deepEqual(result.evidence, []);
   assert.match(requests[3].input.at(-1).content, /Irrelevant evidence reference/);
+}));
+
+test("wafer history alone cannot conclude that no source events overlap", async () => fixture(async path => {
+  const history = call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }));
+  const bad = final("No verified machine-event overlaps were found for SYN-WAF-00001.",
+    [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+  const good = final("SYN-WAF-00001 has a processing step on Machine 1; source-event overlap was not investigated.",
+    [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+  const { client, requests } = mock([response([history]), response(), bad, good]);
+  const result = await investigate("Show processing history for SYN-WAF-00001", client, path);
+  assert.equal(result.answer, JSON.parse(good.output_text).answer);
+  assert.match(requests[3].input.at(-1).content, /not investigated|not retrieved/i);
+  assert.match(result.uncertainty.join(" "), /not independently retrieved or investigated/);
+}));
+
+test("history can report its flag while explicitly saying overlap checks were not performed", async () => fixture(async path => {
+  const answer = "SYN-WAF-00001 has a potential-exposure flag in its processing history; no machine-event overlap checks were performed.";
+  const { client, requests } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(),
+    final(answer, [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }])]);
+  assert.equal((await investigate("Show wafer history", client, path)).answer, answer);
+  assert.equal(requests.length, 3);
+}));
+
+test("history can say overlaps were not independently checked", async () => fixture(async path => {
+  const answer = "SYN-WAF-00001 has a potential-exposure flag; overlapping machine events were not independently checked.";
+  const { client } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(),
+    final(answer, [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }])]);
+  assert.equal((await investigate("Show wafer history", client, path)).answer, answer);
+}));
+
+test("opt-in rejected-answer diagnostics redact API keys and omit transcripts", async () => fixture(async path => {
+  const previous = process.env.PROCESSIQ_CAPTURE_REJECTED_RESPONSES;
+  process.env.PROCESSIQ_CAPTURE_REJECTED_RESPONSES = "1";
+  const directory = join(process.cwd(), "eval/reports/rejected-final");
+  const before = new Set(await readdir(directory).catch(() => []));
+  try {
+    const bad = final("No machine-event overlaps exist for SYN-WAF-00001. api_key=sk-testsecret123456789", [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+    const good = final("SYN-WAF-00001 processing history was retrieved; overlap was not checked.", [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+    const { client } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(), bad, good]);
+    await investigate("Show wafer history", client, path);
+    const created = (await readdir(directory)).filter(name => !before.has(name));
+    assert.equal(created.length, 1);
+    const text = await readFile(join(directory, created[0]), "utf8");
+    assert.match(text, /Uninvestigated event overlap claim/);
+    assert.match(text, /No machine-event overlaps exist/);
+    assert.doesNotMatch(text, /sk-testsecret123456789|function_call_output|api_key=sk-/);
+  } finally {
+    if (previous === undefined) delete process.env.PROCESSIQ_CAPTURE_REJECTED_RESPONSES;
+    else process.env.PROCESSIQ_CAPTURE_REJECTED_RESPONSES = previous;
+  }
+}));
+
+test("history can list steps without an overlap conclusion", async () => fixture(async path => {
+  const answer = "SYN-WAF-00001 has a completed processing step on Machine 1 in SYN-LOT-00001.";
+  const { client, requests } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(),
+    final(answer, [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }])]);
+  assert.equal((await investigate("Show wafer history", client, path)).answer, answer);
+  assert.equal(requests.length, 3);
+}));
+
+test("a verified overlap statement needs processing-to-event evidence", async () => fixture(async path => {
+  const answer = "SYN-WAF-00001 processing overlapped a Machine 1 error.";
+  const invalid = final(answer, [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }, { source_type: "error", source_id: "1" }]);
+  const { client } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" })), call("getMachineEvents")]), response(), invalid, invalid]);
+  await assert.rejects(investigate("Show wafer history and overlap", client, path), /overlap claim/i);
+}));
+
+test("a verified exposure assertion cannot be inferred from the history flag", async () => fixture(async path => {
+  const invalid = final("SYN-WAF-00001 has verified potential exposure.", [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+  const { client } = mock([response([call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(), invalid, invalid]);
+  await assert.rejects(investigate("Show wafer history", client, path), /Missing exposure finding for wafer claim/);
+}));
+
+test("a fully checked processing window can report no overlapping events", async () => fixture(async path => {
+  const db = new DatabaseSync(path);
+  db.exec("INSERT INTO wafers VALUES ('SYN-WAF-00002', 'SYN-LOT-00001', 1); INSERT INTO wafer_processing(processing_id, wafer_id, lot_id, machine_id, process_start, process_end, operator_id, status, potentially_exposed) VALUES ('SYN-PROC-00002', 'SYN-WAF-00002', 'SYN-LOT-00001', 2, '2015-01-03T06:45:00', '2015-01-03T07:15:00', 'SYN-OP-001', 'completed', 0)");
+  db.close();
+  const history = call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00002" }));
+  const affected = call("getAffectedWafers", JSON.stringify({ machineId: 2, startTime: start, endTime: end }));
+  const { client } = mock([response([history, affected]), response(),
+    final("No machine-event overlaps were found for SYN-WAF-00002 in its processing window.",
+      [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00002" }])]);
+  const result = await investigate("Check SYN-WAF-00002 processing and source events", client, path);
+  assert.match(result.answer, /No machine-event overlaps were found/);
+  assert.doesNotMatch(result.uncertainty.join(" "), /not independently retrieved/);
+}));
+
+test("existing safety uncertainty is not duplicated", async () => fixture(async path => {
+  const { client } = mock([response([call("getAffectedWafers")]), response(),
+    final("SYN-WAF-00001 was potentially exposed to error1.", [],
+      ["Potential exposure does not prove defects or causation."], [exposure])]);
+  const result = await investigate("Assess Machine 1 wafer exposure", client, path);
+  assert.deepEqual(result.uncertainty, ["Potential exposure does not prove defects or causation."]);
+}));
+
+test("uncited equipment code is repaired without confusing the event ID", async () => fixture(async path => {
+  const bad = final("Machine 1 recorded error1 and error2 during SYN-WAF-00001 processing; error 1 was the event ID.",
+    [{ source_type: "error", source_id: "1" }, { source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+  const good = final("Machine 1 recorded equipment code error1 (database event ID 1) during SYN-WAF-00001 processing.",
+    [{ source_type: "error", source_id: "1" }, { source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]);
+  const { client } = mock([response([call("getMachineEvents"), call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }))]), response(), bad, good]);
+  const result = await investigate("Assess the machine error and wafer", client, path);
+  assert.equal(result.answer, JSON.parse(good.output_text).answer);
 }));
 
 test("an error in the window cannot support a maintenance-only answer", async () => fixture(async path => {
