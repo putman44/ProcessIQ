@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { schema } from "../scripts/lib/schema.mjs";
 import { openInvestigation } from "../src/lib/investigation.ts";
-import { investigate } from "../src/lib/investigation-agent.ts";
+import { investigate, InvestigationFailure } from "../src/lib/investigation-agent.ts";
 
 const start = "2015-01-03T06:30:00";
 const end = "2015-01-03T08:00:00";
@@ -77,6 +77,19 @@ test("single-tool investigation cites original event", async () => fixture(async
   assert.equal(requests[0].store, false);
 }));
 
+test("AI tool windows accept minute precision and reject malformed local timestamps", async () => fixture(async path => {
+  const minuteArgs = JSON.stringify({ machineId: 1, startTime: "2015-01-03T06:30", endTime: "2015-01-03T08:00" });
+  const invalidArgs = JSON.stringify({ machineId: 1, startTime: "2015-02-30T06:30", endTime: "2015-03-01T08:00" });
+  const { client } = mock([
+    response([call("getMachineEvents", minuteArgs), call("getMachineEvents", invalidArgs, "invalid")]),
+    response(),
+    final("Machine 1 recorded error1.", [{ source_type: "error", source_id: "1" }]),
+  ]);
+  const result = await investigate("What happened in this window?", client, path);
+  assert.deepEqual(result.tool_use.map(tool => tool.status), ["ok", "error"]);
+  assert.match(result.tool_use[1].error, /Invalid timestamp/);
+}));
+
 test("multi-tool investigation distinguishes synthetic exposure and notes", async () => fixture(async path => {
   const { client, requests } = mock([
     response([call("getMachineEvents"), call("getAffectedWafers")]),
@@ -109,8 +122,8 @@ test("Machine 1 incident adds linked synthetic processing and source event to fi
 
 test("rejects wafer exposure without a complete linked finding", async () => fixture(async path => {
   for (const findings of [[], [{ ...exposure, source_events: [] }], [{ ...exposure, processing_id: "SYN-PROC-99999" }]]) {
-    const { client } = mock([response([call("getAffectedWafers")]), response(),
-      final("SYN-WAF-00001 was potentially exposed.", [{ source_type: "error", source_id: "1" }], [], findings)]);
+    const invalid = final("SYN-WAF-00001 was potentially exposed.", [{ source_type: "error", source_id: "1" }], [], findings);
+    const { client } = mock([response([call("getAffectedWafers")]), response(), invalid, invalid]);
     await assert.rejects(investigate("Was SYN-WAF-00001 exposed?", client, path), /exposure finding/i);
   }
 }));
@@ -120,8 +133,47 @@ test("requires every overlapping source event for an exposure finding", async ()
   db.exec("INSERT INTO errors(machine_id, recorded_at, error_code) VALUES (1, '2015-01-03T07:05:00', 'error2')");
   db.close();
   const { client } = mock([response([call("getAffectedWafers")]), response(),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [exposure]),
     final("SYN-WAF-00001 was potentially exposed.", [], [], [exposure])]);
   await assert.rejects(investigate("Was SYN-WAF-00001 exposed?", client, path), /Incomplete exposure finding/);
+}));
+
+test("repairs two separate wafer exposures with their own processing and event citations", async () => fixture(async path => {
+  const db = new DatabaseSync(path);
+  db.exec(`INSERT INTO errors(machine_id, recorded_at, error_code) VALUES (1, '2015-01-03T07:40:00', 'error2');
+    INSERT INTO wafers VALUES ('SYN-WAF-00002', 'SYN-LOT-00001', 1);
+    INSERT INTO wafer_processing(processing_id, wafer_id, lot_id, machine_id, process_start, process_end, operator_id, status, potentially_exposed)
+      VALUES ('SYN-PROC-00002', 'SYN-WAF-00002', 'SYN-LOT-00001', 1, '2015-01-03T07:30:00', '2015-01-03T07:50:00', 'SYN-OP-001', 'completed', 1);`);
+  db.close();
+  const second = { wafer_id: "SYN-WAF-00002", processing_id: "SYN-PROC-00002", source_events: [{ source_type: "error", source_id: "2" }] };
+  const answer = "SYN-WAF-00001 and SYN-WAF-00002 were potentially exposed; no defect is established.";
+  const { client, requests } = mock([
+    response([call("getAffectedWafers")]), response(),
+    final(answer, [], [], [exposure]),
+    final(answer, [], [], [exposure, second]),
+  ]);
+  const result = await investigate("Investigate two Machine 1 errors and affected wafers", client, path);
+  assert.deepEqual(result.exposure_findings, [exposure, second]);
+  assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`), [
+    "synthetic_processing:SYN-PROC-00001", "error:1",
+    "synthetic_processing:SYN-PROC-00002", "error:2",
+  ]);
+  assert.equal(requests.length, 4);
+  assert.equal(requests[3].store, false);
+}));
+
+test("incomplete final responses identify the output limit without exposing model text", async () => fixture(async path => {
+  const { client } = mock([
+    response([call("getAffectedWafers")]), response(),
+    { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output_text: "sensitive model text" },
+  ]);
+  await assert.rejects(investigate("Investigate Machine 1", client, path), error => {
+    assert.ok(error instanceof InvestigationFailure);
+    assert.equal(error.stage, "final_response_status");
+    assert.equal(error.errorType, "IncompleteResponse");
+    assert.equal(error.message, "Model response incomplete (max_output_tokens)");
+    return true;
+  });
 }));
 
 test("structured exposure finding can supply all final citations", async () => fixture(async path => {
@@ -130,6 +182,66 @@ test("structured exposure finding can supply all final citations", async () => f
   const result = await investigate("Was SYN-WAF-00001 exposed?", client, path);
   assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`),
     ["synthetic_processing:SYN-PROC-00001", "error:1"]);
+}));
+
+test("repairs incorrect evidence IDs and types using exact verified pairs", async () => fixture(async path => {
+  for (const bad of [
+    { source_type: "error", source_id: "999" },
+    { source_type: "failure", source_id: "1" },
+  ]) {
+    const good = { source_type: "error", source_id: "1" };
+    const { client, requests } = mock([
+      response([call("getMachineEvents")]), response(),
+      final("Machine 1 recorded error1.", [bad]),
+      final("Machine 1 recorded error1.", [good]),
+    ]);
+    const result = await investigate("What happened to Machine 1?", client, path);
+    assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`), ["error:1"]);
+    assert.match(requests[3].input.at(-1).content, /error:1/);
+    assert.equal(requests.length, 4);
+  }
+}));
+
+test("invented evidence cannot survive repair or trigger a second repair", async () => fixture(async path => {
+  const invented = { source_type: "error", source_id: "999" };
+  const { client, requests } = mock([
+    response([call("getMachineEvents")]), response(),
+    final("Invented error 999 occurred.", [invented]),
+    final("Invented error 999 occurred.", [invented]),
+  ]);
+  await assert.rejects(investigate("What happened to Machine 1?", client, path), error => {
+    assert.equal(error.stage, "final_repair_validation");
+    assert.match(error.message, /Unsupported evidence reference/);
+    assert.deepEqual(error.invalidReference, { source_type: "error", source_id: "999", problem: "source_id" });
+    return true;
+  });
+  assert.equal(requests.length, 4);
+}));
+
+test("repair cannot keep an invented source ID in the answer after changing citations", async () => fixture(async path => {
+  const { client, requests } = mock([
+    response([call("getMachineEvents")]), response(),
+    final("Machine 1 recorded error 999.", [{ source_type: "error", source_id: "999" }]),
+    final("Machine 1 recorded error 999.", [{ source_type: "error", source_id: "1" }]),
+  ]);
+  await assert.rejects(investigate("What happened to Machine 1?", client, path), error => {
+    assert.equal(error.stage, "final_repair_validation");
+    assert.equal(error.message, "Unsupported evidence claim");
+    return true;
+  });
+  assert.equal(requests.length, 4);
+}));
+
+test("repairs a wrong exposure event reference without inventing a link", async () => fixture(async path => {
+  const bad = { ...exposure, source_events: [{ source_type: "failure", source_id: "1" }] };
+  const { client, requests } = mock([
+    response([call("getAffectedWafers")]), response(),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [bad]),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [exposure]),
+  ]);
+  const result = await investigate("Was SYN-WAF-00001 exposed?", client, path);
+  assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`), ["synthetic_processing:SYN-PROC-00001", "error:1"]);
+  assert.equal(requests.length, 4);
 }));
 
 test("invalid tool arguments return a tool error and empty results stay empty", async () => fixture(async path => {
@@ -143,9 +255,7 @@ test("invalid tool arguments return a tool error and empty results stay empty", 
   assert.deepEqual(result.evidence, []);
 }));
 
-test("rejects invented evidence and confirmed-defect claims", async () => fixture(async path => {
-  const invented = mock([response([call("getMachineEvents")]), response(), final("Something happened", [{ source_type: "error", source_id: "999" }])]);
-  await assert.rejects(investigate("What happened to Machine 1?", invented.client, path), /Unsupported evidence/);
+test("rejects confirmed-defect claims", async () => fixture(async path => {
   const defect = mock([response([call("getAffectedWafers")]), response(), final("The wafer is confirmed defective.", [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }])]);
   await assert.rejects(investigate("Is the wafer defective?", defect.client, path), /Unsupported causal/);
 }));

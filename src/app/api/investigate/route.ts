@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { investigate } from "../../../lib/investigation-agent";
+import { investigate, InvestigationFailure } from "../../../lib/investigation-agent";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,16 @@ export async function POST(request: Request) {
   try {
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 1, timeout: 30000 });
     return Response.json(await investigate((body as { question: string }).question, client));
-  } catch {
+  } catch (error) {
+    const failure = error instanceof InvestigationFailure
+      ? error
+      : new InvestigationFailure("endpoint", "UnknownError", "Unexpected investigation error");
+    console.error("Investigation failed", {
+      stage: failure.stage,
+      errorType: failure.errorType,
+      message: failure.message,
+      ...(failure.invalidReference ? { invalidReference: failure.invalidReference } : {}),
+    });
     return Response.json({ error: "Investigation failed" }, { status: 502 });
   }
 }

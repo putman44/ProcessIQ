@@ -26,9 +26,10 @@ export function parseCsvLine(line) {
 
 export function isoLocalTimestamp(value) {
   const trimmed = value.trim();
-  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(trimmed);
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
   if (!match) throw new Error(`Invalid timestamp format: ${value}`);
-  const [, y, mo, d, h, mi, s] = match.map(String);
+  const [, y, mo, d, h, mi] = match;
+  const s = match[6] ?? "00";
   const date = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
   if (date.getUTCFullYear() !== +y || date.getUTCMonth() + 1 !== +mo || date.getUTCDate() !== +d || date.getUTCHours() !== +h || date.getUTCMinutes() !== +mi || date.getUTCSeconds() !== +s) {
     throw new Error(`Invalid timestamp value: ${value}`);
