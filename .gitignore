@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+# These public source CSVs are downloaded on demand; do not commit large data files.
+data/raw/*.csv
+# Generated database and SQLite sidecars.
+data/*.sqlite
+data/*.sqlite-*
+data/*.sqlite.*
+# Keep empty data directories in Git.
+!data/raw/.gitkeep
