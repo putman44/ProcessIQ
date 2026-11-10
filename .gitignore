@@ -14,5 +14,6 @@ data/raw/*.csv
 data/*.sqlite
 data/*.sqlite-*
 data/*.sqlite.*
+eval/reports/
 # Keep empty data directories in Git.
 !data/raw/.gitkeep
