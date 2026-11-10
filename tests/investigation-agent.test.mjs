@@ -259,3 +259,66 @@ test("rejects confirmed-defect claims", async () => fixture(async path => {
   const defect = mock([response([call("getAffectedWafers")]), response(), final("The wafer is confirmed defective.", [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }])]);
   await assert.rejects(investigate("Is the wafer defective?", defect.client, path), /Unsupported causal/);
 }));
+
+test("wafer history removes an unverified exposure finding while retaining processing evidence", async () => fixture(async path => {
+  const historyCall = call("getWaferHistory", JSON.stringify({ waferId: "SYN-WAF-00001" }));
+  const inventedFinding = final("SYN-WAF-00001 was potentially exposed.",
+    [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }], [], [exposure]);
+  const { client, requests } = mock([
+    response([historyCall]), response(), inventedFinding,
+    final("SYN-WAF-00001 has one synthetic processing step in SYN-LOT-00001.",
+      [{ source_type: "synthetic_processing", source_id: "SYN-PROC-00001" }]),
+  ]);
+  const result = await investigate("Show processing history and lot for SYN-WAF-00001", client, path);
+  assert.deepEqual(result.exposure_findings, []);
+  assert.deepEqual(result.evidence.map(e => e.source_id), ["SYN-PROC-00001"]);
+  assert.match(requests[3].input.at(-1).content, /processing history alone cannot establish exposure/);
+}));
+
+test("exposure repair uses the exact processing-to-event relationship", async () => fixture(async path => {
+  const db = new DatabaseSync(path);
+  db.exec(`INSERT INTO failures(machine_id, recorded_at, component) VALUES (1, '2015-01-03T07:08:00', 'component');
+    INSERT INTO maintenance(machine_id, recorded_at, component) VALUES (1, '2015-01-03T07:09:00', 'component');`);
+  db.close();
+  const linked = { wafer_id: "SYN-WAF-00001", processing_id: "SYN-PROC-00001", source_events: [
+    { source_type: "error", source_id: "1" }, { source_type: "failure", source_id: "1" },
+  ] };
+  const wrong = { ...linked, source_events: [{ source_type: "maintenance", source_id: "1" }] };
+  const { client, requests } = mock([
+    response([call("getAffectedWafers"), call("getMachineEvents")]), response(),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [wrong]),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [linked]),
+  ]);
+  const result = await investigate("Which wafer was potentially exposed to Machine 1 events?", client, path);
+  assert.deepEqual(result.exposure_findings, [linked]);
+  assert.match(requests[3].input.at(-1).content, /failure:1/);
+  assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`),
+    ["synthetic_processing:SYN-PROC-00001", "error:1", "failure:1"]);
+}));
+
+test("empty event window rejects unrelated telemetry and permits an uncited absence", async () => fixture(async path => {
+  const db = new DatabaseSync(path);
+  db.exec("INSERT INTO telemetry(machine_id, recorded_at, volt, rotate, pressure, vibration) VALUES (1, '2015-01-03T08:00:00', 1, 2, 3, 4)");
+  db.close();
+  const windowArgs = JSON.stringify({ machineId: 1, startTime: "2015-01-03T08:00:00", endTime: "2015-01-03T09:00:00" });
+  const bad = final("No errors or maintenance were recorded in the window.",
+    [{ source_type: "telemetry", source_id: "1:2015-01-03T08:00:00" }]);
+  const good = final("No errors or maintenance were recorded in the window.");
+  const { client, requests } = mock([
+    response([call("getMachineEvents", windowArgs), call("getMachineTelemetry", windowArgs)]),
+    response(), bad, good,
+  ]);
+  const result = await investigate("Were any Machine 1 errors or maintenance recorded from 08:00 to 09:00?", client, path);
+  assert.deepEqual(result.evidence, []);
+  assert.match(requests[3].input.at(-1).content, /Irrelevant evidence reference/);
+}));
+
+test("an error in the window cannot support a maintenance-only answer", async () => fixture(async path => {
+  const bad = final("No maintenance was recorded.", [{ source_type: "error", source_id: "1" }]);
+  const { client } = mock([
+    response([call("getMachineEvents")]), response(), bad,
+    final("No maintenance was recorded."),
+  ]);
+  const result = await investigate("Was maintenance recorded on Machine 1 in this window?", client, path);
+  assert.deepEqual(result.evidence, []);
+}));
