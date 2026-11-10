@@ -13,7 +13,8 @@ const end = "2015-01-03T08:00:00";
 const args = JSON.stringify({ machineId: 1, startTime: start, endTime: end });
 const call = (name, argumentsText = args, call_id = name) => ({ type: "function_call", name, arguments: argumentsText, call_id, status: "completed" });
 const response = (output = [], output_text = "") => ({ id: "mock", status: "completed", output, output_text });
-const final = (answer, evidence = [], uncertainty = []) => response([], JSON.stringify({ answer, evidence, uncertainty }));
+const exposure = { wafer_id: "SYN-WAF-00001", processing_id: "SYN-PROC-00001", source_events: [{ source_type: "error", source_id: "1" }] };
+const final = (answer, evidence = [], uncertainty = [], exposure_findings = []) => response([], JSON.stringify({ answer, evidence, uncertainty, exposure_findings }));
 
 async function fixture(run) {
   const dir = await mkdtemp(join(tmpdir(), "processiq-agent-"));
@@ -85,13 +86,50 @@ test("multi-tool investigation distinguishes synthetic exposure and notes", asyn
       { source_type: "error", source_id: "1" },
       { source_type: "synthetic_processing", source_id: "SYN-PROC-00001" },
       { source_type: "synthetic_note", source_id: "SYN-NOTE-001" },
-    ], ["No wafer quality measurement is available."]),
+    ], ["No wafer quality measurement is available."], [exposure]),
   ]);
   const result = await investigate("Explain Machine 1 and exposed wafers", client, path);
   assert.equal(result.tool_use.length, 3);
   assert.deepEqual(result.evidence.map(e => e.source_type), ["error", "synthetic_processing", "synthetic_note"]);
   assert.equal(requests[1].input.some(x => x.type === "function_call_output"), true);
   assert.equal(JSON.stringify(requests[2].input).includes("SYN-NOTE-002"), false);
+}));
+
+test("Machine 1 incident adds linked synthetic processing and source event to final evidence and uncertainty", async () => fixture(async path => {
+  const { client } = mock([
+    response([call("getAffectedWafers")]), response(),
+    final("Machine 1 error1 at 2015-01-03T07:00:00 potentially exposed SYN-WAF-00001.",
+      [{ source_type: "error", source_id: "1" }], [], [exposure]),
+  ]);
+  const result = await investigate("What happened on Machine 1 at 2015-01-03T07:00:00?", client, path);
+  assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`), ["error:1", "synthetic_processing:SYN-PROC-00001"]);
+  assert.match(result.uncertainty.join(" "), /do not prove wafer defects or causation/i);
+  assert.deepEqual(result.tool_use.map(x => [x.count, x.count_unit]), [[1, "wafers"]]);
+}));
+
+test("rejects wafer exposure without a complete linked finding", async () => fixture(async path => {
+  for (const findings of [[], [{ ...exposure, source_events: [] }], [{ ...exposure, processing_id: "SYN-PROC-99999" }]]) {
+    const { client } = mock([response([call("getAffectedWafers")]), response(),
+      final("SYN-WAF-00001 was potentially exposed.", [{ source_type: "error", source_id: "1" }], [], findings)]);
+    await assert.rejects(investigate("Was SYN-WAF-00001 exposed?", client, path), /exposure finding/i);
+  }
+}));
+
+test("requires every overlapping source event for an exposure finding", async () => fixture(async path => {
+  const db = new DatabaseSync(path);
+  db.exec("INSERT INTO errors(machine_id, recorded_at, error_code) VALUES (1, '2015-01-03T07:05:00', 'error2')");
+  db.close();
+  const { client } = mock([response([call("getAffectedWafers")]), response(),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [exposure])]);
+  await assert.rejects(investigate("Was SYN-WAF-00001 exposed?", client, path), /Incomplete exposure finding/);
+}));
+
+test("structured exposure finding can supply all final citations", async () => fixture(async path => {
+  const { client } = mock([response([call("getAffectedWafers")]), response(),
+    final("SYN-WAF-00001 was potentially exposed.", [], [], [exposure])]);
+  const result = await investigate("Was SYN-WAF-00001 exposed?", client, path);
+  assert.deepEqual(result.evidence.map(e => `${e.source_type}:${e.source_id}`),
+    ["synthetic_processing:SYN-PROC-00001", "error:1"]);
 }));
 
 test("invalid tool arguments return a tool error and empty results stay empty", async () => fixture(async path => {
