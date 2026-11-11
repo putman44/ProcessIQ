@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
-import { openInvestigation } from "./investigation.ts";
 import { isoLocalTimestamp } from "../../scripts/lib/csv.mjs";
+import { openInvestigation } from "./investigation.ts";
 
 type Investigation = ReturnType<typeof openInvestigation>;
 type ToolName = Exclude<keyof Investigation, "close">;
@@ -16,19 +16,42 @@ type ToolUse = {
   name: string;
   status: "ok" | "error";
   count: number;
-  count_unit: "readings" | "events" | "failures" | "steps" | "wafers" | "notes" | "none";
+  count_unit:
+    | "readings"
+    | "events"
+    | "failures"
+    | "steps"
+    | "wafers"
+    | "notes"
+    | "none";
   truncated: boolean;
   error?: string;
 };
 type EvidenceRef = { source_type: string; source_id: string };
-type Exposure = { wafer_id: string; processing_id: string; source_events: EvidenceRef[] };
+type Exposure = {
+  wafer_id: string;
+  processing_id: string;
+  source_events: EvidenceRef[];
+};
 
 export class InvestigationFailure extends Error {
   readonly stage: string;
   readonly errorType: string;
-  readonly invalidReference?: { source_type: string; source_id: string; problem: string };
-  constructor(stage: string, errorType: string, message: string,
-    invalidReference?: { source_type: string; source_id: string; problem: string }) {
+  readonly invalidReference?: {
+    source_type: string;
+    source_id: string;
+    problem: string;
+  };
+  constructor(
+    stage: string,
+    errorType: string,
+    message: string,
+    invalidReference?: {
+      source_type: string;
+      source_id: string;
+      problem: string;
+    },
+  ) {
     super(message);
     this.name = "InvestigationFailure";
     this.stage = stage;
@@ -38,50 +61,107 @@ export class InvestigationFailure extends Error {
 }
 
 class UnsupportedEvidenceReference extends Error {
-  readonly invalidReference: { source_type: string; source_id: string; problem: string };
+  readonly invalidReference: {
+    source_type: string;
+    source_id: string;
+    problem: string;
+  };
   constructor(ref: EvidenceRef, ledger: Map<string, Evidence>) {
     super("Unsupported evidence reference");
     this.name = "UnsupportedEvidenceReference";
-    const safeType = /^(?:error|maintenance|failure|telemetry|synthetic_processing|synthetic_note)$/.test(ref.source_type)
-      ? ref.source_type : "[invalid]";
-    const safeId = /^(?:\d{1,12}|SYN-(?:PROC|NOTE)-[A-Za-z0-9-]{1,32}|\d{1,12}:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})$/.test(ref.source_id)
-      ? ref.source_id : "[invalid]";
-    const problem = [...ledger.values()].some(item => item.source_id === ref.source_id)
-      ? "source_type" : "source_id";
-    this.invalidReference = { source_type: safeType, source_id: safeId, problem };
+    const safeType =
+      /^(?:error|maintenance|failure|telemetry|synthetic_processing|synthetic_note)$/.test(
+        ref.source_type,
+      )
+        ? ref.source_type
+        : "[invalid]";
+    const safeId =
+      /^(?:\d{1,12}|SYN-(?:PROC|NOTE)-[A-Za-z0-9-]{1,32}|\d{1,12}:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})$/.test(
+        ref.source_id,
+      )
+        ? ref.source_id
+        : "[invalid]";
+    const problem = [...ledger.values()].some(
+      (item) => item.source_id === ref.source_id,
+    )
+      ? "source_type"
+      : "source_id";
+    this.invalidReference = {
+      source_type: safeType,
+      source_id: safeId,
+      problem,
+    };
   }
 }
 
 function diagnostic(error: unknown, stage: string): InvestigationFailure {
   if (error instanceof InvestigationFailure) return error;
   if (error instanceof UnsupportedEvidenceReference)
-    return new InvestigationFailure(stage, error.name, error.message, error.invalidReference);
+    return new InvestigationFailure(
+      stage,
+      error.name,
+      error.message,
+      error.invalidReference,
+    );
   if (error instanceof OpenAI.APIError)
-    return new InvestigationFailure(stage, "OpenAI.APIError", `OpenAI request failed (HTTP ${error.status ?? "unknown"})`);
+    return new InvestigationFailure(
+      stage,
+      "OpenAI.APIError",
+      `OpenAI request failed (HTTP ${error.status ?? "unknown"})`,
+    );
   const safeMessages = [
-    "Model response incomplete", "Final response incomplete", "Tool-call limit exceeded",
-    "Tool-call iteration limit exceeded", "Investigation requires tool evidence",
-    "Invalid final response", "Invalid evidence reference", "Unsupported evidence reference",
-    "Invalid exposure finding", "Unsupported exposure finding",
-    "Unsupported exposure finding source event", "Incomplete exposure finding source events",
-    "Missing exposure finding for wafer claim", "Unsupported exposure finding evidence",
+    "Model response incomplete",
+    "Final response incomplete",
+    "Tool-call limit exceeded",
+    "Tool-call iteration limit exceeded",
+    "Investigation requires tool evidence",
+    "Invalid final response",
+    "Invalid evidence reference",
+    "Unsupported evidence reference",
+    "Invalid exposure finding",
+    "Unsupported exposure finding",
+    "Unsupported exposure finding source event",
+    "Incomplete exposure finding source events",
+    "Missing exposure finding for wafer claim",
+    "Unsupported exposure finding evidence",
     "Irrelevant evidence reference",
-    "Final answer omitted available evidence", "Invalid uncertainty",
-    "Unsupported causal or defect conclusion", "Unsupported evidence claim",
+    "Final answer omitted available evidence",
+    "Invalid uncertainty",
+    "Unsupported causal or defect conclusion",
+    "Unsupported evidence claim",
   ];
-  const message = error instanceof Error && safeMessages.includes(error.message)
-    ? error.message : "Unexpected investigation error";
-  const errorType = error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(error.name)
-    ? error.name : "UnknownError";
+  const message =
+    error instanceof Error && safeMessages.includes(error.message)
+      ? error.message
+      : "Unexpected investigation error";
+  const errorType =
+    error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(error.name)
+      ? error.name
+      : "UnknownError";
   return new InvestigationFailure(stage, errorType, message);
 }
 
-function incompleteResponse(stage: string, status?: string, reason?: string | null) {
-  const safeStatus = status && ["incomplete", "failed", "cancelled", "queued", "in_progress"].includes(status)
-    ? status : "unknown";
-  const safeReason = reason === "max_output_tokens" || reason === "content_filter"
-    ? ` (${reason})` : "";
-  return new InvestigationFailure(stage, "IncompleteResponse", `Model response ${safeStatus}${safeReason}`);
+function incompleteResponse(
+  stage: string,
+  status?: string,
+  reason?: string | null,
+) {
+  const safeStatus =
+    status &&
+    ["incomplete", "failed", "cancelled", "queued", "in_progress"].includes(
+      status,
+    )
+      ? status
+      : "unknown";
+  const safeReason =
+    reason === "max_output_tokens" || reason === "content_filter"
+      ? ` (${reason})`
+      : "";
+  return new InvestigationFailure(
+    stage,
+    "IncompleteResponse",
+    `Model response ${safeStatus}${safeReason}`,
+  );
 }
 
 const MAX_ROUNDS = 4;
@@ -183,10 +263,16 @@ function machineId(value: unknown): number {
   return value;
 }
 function timestamp(value: unknown): string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value))
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)
+  )
     throw new Error("Invalid timestamp");
-  try { return isoLocalTimestamp(value); }
-  catch { throw new Error("Invalid timestamp"); }
+  try {
+    return isoLocalTimestamp(value);
+  } catch {
+    throw new Error("Invalid timestamp");
+  }
 }
 function waferId(value: unknown): string {
   if (typeof value !== "string" || !/^SYN-WAF-\d{5}$/.test(value))
@@ -343,7 +429,10 @@ const finalSchema = schema({
       processing_id: { type: "string" },
       source_events: {
         type: "array",
-        items: schema({ source_type: { type: "string" }, source_id: { type: "string" } }),
+        items: schema({
+          source_type: { type: "string" },
+          source_id: { type: "string" },
+        }),
       },
     }),
   },
@@ -354,14 +443,28 @@ function hasUnsupportedConclusion(answer: string): boolean {
   // Scope a denial to its own clause. A disclaimer elsewhere cannot excuse an
   // affirmative claim, and a negated conclusion must not be treated as proof.
   const clauses = answer.split(/[.!?;]|,|\b(?:but|however|although|yet)\b/i);
-  const strongClaim = /\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en)|establish(?:ed|es)?|definitely|certainly|conclusively)\b(?:\s+\w+){0,8}?\s+\b(?:defect(?:ive|s)?|caus(?:e|ed|ation)|damag(?:e|ed)|quality\s+impact)\b|\b(?:wafer\s+)?(?:defect(?:ive|s)?|damag(?:e|ed)|quality\s+impact)\b(?:\s+\w+){0,5}?\s+\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en))\b/gi;
-  const denial = /\b(?:no|not|never|cannot|can't|doesn't|didn't|don't|isn't|wasn't|without|uncertain|unproven)\b(?:\s+\w+){0,5}\s*$/i;
-  return clauses.some(clause => [...clause.matchAll(strongClaim)].some(match => {
-    const trigger = /\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en)|establish(?:ed|es)?|definitely|certainly|conclusively)\b/i.exec(match[0]);
-    const before = clause.slice(0, match.index + (trigger?.index ?? 0));
-    const afterTrigger = match[0].slice((trigger?.index ?? 0) + (trigger?.[0].length ?? 0));
-    return !denial.test(before) && !/\b(?:no|not|never|cannot|can't)\b(?:\s+\w+){0,5}\s+\b(?:defect(?:ive|s)?|caus(?:e|ed|ation)|damag(?:e|ed)|quality\s+impact)\b/i.test(afterTrigger);
-  }));
+  const strongClaim =
+    /\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en)|establish(?:ed|es)?|definitely|certainly|conclusively)\b(?:\s+\w+){0,8}?\s+\b(?:defect(?:ive|s)?|caus(?:e|ed|ation)|damag(?:e|ed)|quality\s+impact)\b|\b(?:wafer\s+)?(?:defect(?:ive|s)?|damag(?:e|ed)|quality\s+impact)\b(?:\s+\w+){0,5}?\s+\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en))\b/gi;
+  const denial =
+    /\b(?:no|not|never|cannot|can't|doesn't|didn't|don't|isn't|wasn't|without|uncertain|unproven)\b(?:\s+\w+){0,5}\s*$/i;
+  return clauses.some((clause) =>
+    [...clause.matchAll(strongClaim)].some((match) => {
+      const trigger =
+        /\b(?:confirm(?:ed|s)?|prov(?:e|ed|es|en)|establish(?:ed|es)?|definitely|certainly|conclusively)\b/i.exec(
+          match[0],
+        );
+      const before = clause.slice(0, match.index + (trigger?.index ?? 0));
+      const afterTrigger = match[0].slice(
+        (trigger?.index ?? 0) + (trigger?.[0].length ?? 0),
+      );
+      return (
+        !denial.test(before) &&
+        !/\b(?:no|not|never|cannot|can't)\b(?:\s+\w+){0,5}\s+\b(?:defect(?:ive|s)?|caus(?:e|ed|ation)|damag(?:e|ed)|quality\s+impact)\b/i.test(
+          afterTrigger,
+        )
+      );
+    }),
+  );
 }
 
 export async function investigate(
@@ -387,8 +490,11 @@ export async function investigate(
     ...(/\bmaintenance\b/i.test(question) ? ["maintenance"] : []),
     ...(/\bfailures?\b/i.test(question) ? ["failure"] : []),
   ]);
-  const eventOnlyQuestion = requestedEventTypes.size > 0 &&
-    !/\b(?:telemetry|readings?|wafers?|SYN-WAF-\d{5}|processing|expos(?:ed|ure)|defect(?:ive|s)?|quality|damag(?:e|ed)|caus(?:e|ed|ation)|prov(?:e|ed|en))\b/i.test(question);
+  const eventOnlyQuestion =
+    requestedEventTypes.size > 0 &&
+    !/\b(?:telemetry|readings?|wafers?|SYN-WAF-\d{5}|processing|expos(?:ed|ure)|defect(?:ive|s)?|quality|damag(?:e|ed)|caus(?:e|ed|ation)|prov(?:e|ed|en))\b/i.test(
+      question,
+    );
   let stage = "initial_openai_response";
   try {
     const transcript: OpenAI.Responses.ResponseInputItem[] = [
@@ -407,7 +513,11 @@ export async function investigate(
     for (let round = 0; round < MAX_ROUNDS; round++) {
       stage = "tool_call_response";
       if (response.status !== "completed")
-        throw incompleteResponse(stage, response.status, response.incomplete_details?.reason);
+        throw incompleteResponse(
+          stage,
+          response.status,
+          response.incomplete_details?.reason,
+        );
       const calls = response.output.filter(
         (item) => item.type === "function_call",
       );
@@ -431,7 +541,9 @@ export async function investigate(
           for (const item of evidenceFrom(call.name, bounded.value))
             ledger.set(`${item.source_type}:${item.source_id}`, item);
           if (call.name === "getAffectedWafers") {
-            const data = bounded.value as { wafers: Array<Record<string, unknown>> };
+            const data = bounded.value as {
+              wafers: Array<Record<string, unknown>>;
+            };
             for (const row of data.wafers) {
               const key = `${row.wafer_id}:${row.processing_id}`;
               const linked = exposures.get(key) ?? new Set<string>();
@@ -441,7 +553,9 @@ export async function investigate(
             }
           }
           const [field, count_unit] = countFields[call.name as ToolName];
-          const count = ((bounded.value as Record<string, unknown>)[field] as unknown[]).length;
+          const count = (
+            (bounded.value as Record<string, unknown>)[field] as unknown[]
+          ).length;
           tool_use.push({
             name: call.name,
             status: "ok",
@@ -506,95 +620,155 @@ export async function investigate(
     });
     stage = "final_response_status";
     if (final.status !== "completed")
-      throw incompleteResponse(stage, final.status, final.incomplete_details?.reason);
+      throw incompleteResponse(
+        stage,
+        final.status,
+        final.incomplete_details?.reason,
+      );
     stage = "final_response_validation";
     function validate(outputText: string) {
-    const parsed = object(JSON.parse(outputText));
-    if (
-      typeof parsed.answer !== "string" ||
-      parsed.answer.length > 5000 ||
-      !Array.isArray(parsed.evidence) ||
-      !Array.isArray(parsed.uncertainty) ||
-      !Array.isArray(parsed.exposure_findings)
-    )
-      throw new Error("Invalid final response");
-    const evidence = parsed.evidence.map((item) => {
-      const ref = object(item);
+      const parsed = object(JSON.parse(outputText));
       if (
-        typeof ref.source_type !== "string" ||
-        typeof ref.source_id !== "string"
+        typeof parsed.answer !== "string" ||
+        parsed.answer.length > 5000 ||
+        !Array.isArray(parsed.evidence) ||
+        !Array.isArray(parsed.uncertainty) ||
+        !Array.isArray(parsed.exposure_findings)
       )
-        throw new Error("Invalid evidence reference");
-      const found = ledger.get(`${ref.source_type}:${ref.source_id}`);
-      if (!found) throw new UnsupportedEvidenceReference(ref as EvidenceRef, ledger);
-      if (eventOnlyQuestion && !requestedEventTypes.has(found.source_type))
-        throw new Error("Irrelevant evidence reference");
-      return found;
-    });
-    const findings: Exposure[] = parsed.exposure_findings.map((item) => {
-      const finding = object(item);
-      if (typeof finding.wafer_id !== "string" || !/^SYN-WAF-\d{5}$/.test(finding.wafer_id) ||
-          typeof finding.processing_id !== "string" || !Array.isArray(finding.source_events) ||
-          finding.source_events.length === 0)
-        throw new Error("Invalid exposure finding");
-      const linked = exposures.get(`${finding.wafer_id}:${finding.processing_id}`);
-      if (!linked?.size) throw new Error("Unsupported exposure finding");
-      const source_events = finding.source_events.map((value) => {
-        const ref = object(value);
-        if (typeof ref.source_type !== "string" || typeof ref.source_id !== "string" ||
-            !linked.has(`${ref.source_type}:${ref.source_id}`))
-          throw new Error("Unsupported exposure finding source event");
-        return { source_type: ref.source_type, source_id: ref.source_id };
+        throw new Error("Invalid final response");
+      const evidence = parsed.evidence.map((item) => {
+        const ref = object(item);
+        if (
+          typeof ref.source_type !== "string" ||
+          typeof ref.source_id !== "string"
+        )
+          throw new Error("Invalid evidence reference");
+        const found = ledger.get(`${ref.source_type}:${ref.source_id}`);
+        if (!found)
+          throw new UnsupportedEvidenceReference(ref as EvidenceRef, ledger);
+        if (eventOnlyQuestion && !requestedEventTypes.has(found.source_type))
+          throw new Error("Irrelevant evidence reference");
+        return found;
       });
-      if ([...linked].some((key) => !source_events.some((event) => `${event.source_type}:${event.source_id}` === key)))
-        throw new Error("Incomplete exposure finding source events");
-      return { wafer_id: finding.wafer_id, processing_id: finding.processing_id, source_events };
-    });
-    const claimsExposure = /\b(?:potentially|possibly|likely|may have been|could have been)\s+exposed\b|\b(?:exposed|affected)\s+wafers?\b/i.test(parsed.answer);
-    const mentionedWafers = [...parsed.answer.matchAll(/SYN-WAF-\d{5}/g)].map((match) => match[0]);
-    if (claimsExposure && (!findings.length || mentionedWafers.some((id) => !findings.some((finding) => finding.wafer_id === id))))
-      throw new Error("Missing exposure finding for wafer claim");
-    for (const finding of findings) {
-      const verifiedEvents = exposures.get(`${finding.wafer_id}:${finding.processing_id}`);
-      if (!verifiedEvents) throw new Error("Unsupported exposure finding");
-      for (const key of [`synthetic_processing:${finding.processing_id}`,
-        ...verifiedEvents]) {
-        const item = ledger.get(key);
-        if (!item) throw new Error("Unsupported exposure finding evidence");
-        if (!evidence.some((existing) => existing.source_type === item.source_type && existing.source_id === item.source_id))
-          evidence.push(item);
+      const findings: Exposure[] = parsed.exposure_findings.map((item) => {
+        const finding = object(item);
+        if (
+          typeof finding.wafer_id !== "string" ||
+          !/^SYN-WAF-\d{5}$/.test(finding.wafer_id) ||
+          typeof finding.processing_id !== "string" ||
+          !Array.isArray(finding.source_events) ||
+          finding.source_events.length === 0
+        )
+          throw new Error("Invalid exposure finding");
+        const linked = exposures.get(
+          `${finding.wafer_id}:${finding.processing_id}`,
+        );
+        if (!linked?.size) throw new Error("Unsupported exposure finding");
+        const source_events = finding.source_events.map((value) => {
+          const ref = object(value);
+          if (
+            typeof ref.source_type !== "string" ||
+            typeof ref.source_id !== "string" ||
+            !linked.has(`${ref.source_type}:${ref.source_id}`)
+          )
+            throw new Error("Unsupported exposure finding source event");
+          return { source_type: ref.source_type, source_id: ref.source_id };
+        });
+        if (
+          [...linked].some(
+            (key) =>
+              !source_events.some(
+                (event) => `${event.source_type}:${event.source_id}` === key,
+              ),
+          )
+        )
+          throw new Error("Incomplete exposure finding source events");
+        return {
+          wafer_id: finding.wafer_id,
+          processing_id: finding.processing_id,
+          source_events,
+        };
+      });
+      const claimsExposure =
+        /\b(?:potentially|possibly|likely|may have been|could have been)\s+exposed\b|\b(?:exposed|affected)\s+wafers?\b/i.test(
+          parsed.answer,
+        );
+      const mentionedWafers = [...parsed.answer.matchAll(/SYN-WAF-\d{5}/g)].map(
+        (match) => match[0],
+      );
+      if (
+        claimsExposure &&
+        (!findings.length ||
+          mentionedWafers.some(
+            (id) => !findings.some((finding) => finding.wafer_id === id),
+          ))
+      )
+        throw new Error("Missing exposure finding for wafer claim");
+      for (const finding of findings) {
+        const verifiedEvents = exposures.get(
+          `${finding.wafer_id}:${finding.processing_id}`,
+        );
+        if (!verifiedEvents) throw new Error("Unsupported exposure finding");
+        for (const key of [
+          `synthetic_processing:${finding.processing_id}`,
+          ...verifiedEvents,
+        ]) {
+          const item = ledger.get(key);
+          if (!item) throw new Error("Unsupported exposure finding evidence");
+          if (
+            !evidence.some(
+              (existing) =>
+                existing.source_type === item.source_type &&
+                existing.source_id === item.source_id,
+            )
+          )
+            evidence.push(item);
+        }
       }
-    }
-    const relevantEvidence = eventOnlyQuestion
-      ? [...ledger.values()].some(item => requestedEventTypes.has(item.source_type))
-      : ledger.size > 0;
-    if (relevantEvidence && evidence.length === 0)
-      throw new Error("Final answer omitted available evidence");
-    const uncertainty = parsed.uncertainty;
-    if (
-      uncertainty.some(
-        (item) => typeof item !== "string" || item.length > 1000,
-      ) ||
-      uncertainty.length > 20
-    )
-      throw new Error("Invalid uncertainty");
-    const unsupported = hasUnsupportedConclusion(parsed.answer);
-    if (unsupported) throw new Error("Unsupported causal or defect conclusion");
-    if (findings.length)
-      uncertainty.push("Overlapping machine events and synthetic wafer processing indicate potential exposure; they do not prove wafer defects or causation.");
-    return {
-      answer: parsed.answer,
-      evidence,
-      uncertainty: uncertainty as string[],
-      exposure_findings: findings,
-      tool_use,
-    };
+      const relevantEvidence = eventOnlyQuestion
+        ? [...ledger.values()].some((item) =>
+            requestedEventTypes.has(item.source_type),
+          )
+        : ledger.size > 0;
+      if (relevantEvidence && evidence.length === 0)
+        throw new Error("Final answer omitted available evidence");
+      const uncertainty = parsed.uncertainty;
+      if (
+        uncertainty.some(
+          (item) => typeof item !== "string" || item.length > 1000,
+        ) ||
+        uncertainty.length > 20
+      )
+        throw new Error("Invalid uncertainty");
+      const unsupported = hasUnsupportedConclusion(parsed.answer);
+      if (unsupported)
+        throw new Error("Unsupported causal or defect conclusion");
+      if (findings.length)
+        uncertainty.push(
+          "Overlapping machine events and synthetic wafer processing indicate potential exposure; they do not prove wafer defects or causation.",
+        );
+      return {
+        answer: parsed.answer,
+        evidence,
+        uncertainty: uncertainty as string[],
+        exposure_findings: findings,
+        tool_use,
+      };
     }
     try {
       return validate(final.output_text);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "";
-      if (!["Missing exposure finding for wafer claim", "Incomplete exposure finding source events", "Unsupported evidence reference", "Unsupported exposure finding", "Unsupported exposure finding source event", "Irrelevant evidence reference"].includes(reason))
+      if (
+        ![
+          "Missing exposure finding for wafer claim",
+          "Incomplete exposure finding source events",
+          "Unsupported evidence reference",
+          "Unsupported exposure finding",
+          "Unsupported exposure finding source event",
+          "Irrelevant evidence reference",
+        ].includes(reason)
+      )
         throw error;
       // One bounded retry. The original tool transcript contains only database results;
       // the verifier below remains the sole authority for citations and claims.
@@ -602,24 +776,50 @@ export async function investigate(
       const repair = await client.responses.create({
         model,
         instructions,
-        input: [...transcript, {
-          role: "user",
-          content: `The previous final response failed validation: ${reason}. Return a corrected, fully grounded investigation. Allowed evidence source_type:source_id pairs are exactly: ${JSON.stringify([...ledger.keys()])}. Verified exposure relationships from getAffectedWafers are exactly: ${JSON.stringify([...exposures].map(([pair, events]) => ({ pair, source_events: [...events] })))}. If that list is empty, remove exposure findings and unsupported exposure claims; processing history alone cannot establish exposure. Cite only relevant evidence. For an empty event result, give no unrelated telemetry citation. Correct or remove unsupported claims; never invent or substitute records. Include a separate exposure finding for each claimed wafer and every overlapping source event for each processing record.`,
-        }],
-        text: { format: { type: "json_schema", name: "investigation", strict: true, schema: finalSchema } },
+        input: [
+          ...transcript,
+          {
+            role: "user",
+            content: `The previous final response failed validation: ${reason}. Return a corrected, fully grounded investigation. Allowed evidence source_type:source_id pairs are exactly: ${JSON.stringify([...ledger.keys()])}. Verified exposure relationships from getAffectedWafers are exactly: ${JSON.stringify([...exposures].map(([pair, events]) => ({ pair, source_events: [...events] })))}. If that list is empty, remove exposure findings and unsupported exposure claims; processing history alone cannot establish exposure. Cite only relevant evidence. For an empty event result, give no unrelated telemetry citation. Correct or remove unsupported claims; never invent or substitute records. Include a separate exposure finding for each claimed wafer and every overlapping source event for each processing record.`,
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "investigation",
+            strict: true,
+            schema: finalSchema,
+          },
+        },
         max_output_tokens: 2400,
         store: false,
       });
       stage = "final_repair_status";
-      if (repair.status !== "completed") throw incompleteResponse(stage, repair.status, repair.incomplete_details?.reason);
+      if (repair.status !== "completed")
+        throw incompleteResponse(
+          stage,
+          repair.status,
+          repair.incomplete_details?.reason,
+        );
       stage = "final_repair_validation";
       const repaired = validate(repair.output_text);
-      if (error instanceof UnsupportedEvidenceReference &&
-          error.invalidReference.problem === "source_id" &&
-          error.invalidReference.source_id !== "[invalid]" &&
-          ![...ledger.values()].some(item => item.source_id === error.invalidReference.source_id)) {
-        const id = error.invalidReference.source_id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (new RegExp(`(^|[^A-Za-z0-9_-])${id}($|[^A-Za-z0-9_-])`).test(repaired.answer))
+      if (
+        error instanceof UnsupportedEvidenceReference &&
+        error.invalidReference.problem === "source_id" &&
+        error.invalidReference.source_id !== "[invalid]" &&
+        ![...ledger.values()].some(
+          (item) => item.source_id === error.invalidReference.source_id,
+        )
+      ) {
+        const id = error.invalidReference.source_id.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
+        if (
+          new RegExp(`(^|[^A-Za-z0-9_-])${id}($|[^A-Za-z0-9_-])`).test(
+            repaired.answer,
+          )
+        )
           throw new Error("Unsupported evidence claim");
       }
       return repaired;

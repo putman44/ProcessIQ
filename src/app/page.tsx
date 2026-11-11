@@ -3,41 +3,639 @@ import { useEffect, useState } from "react";
 import { dashboardTimestamp } from "../lib/dashboard-time";
 
 type Machine = { machine_id: number; model: string };
-type Event = { source_type: string; source_id: number; recorded_at: string; detail: string };
-type Wafer = { processing_id: string; wafer_id: string; lot_id: string; process_start: string; process_end: string; potential_exposure_status: string; overlapping_source_events: Event[] };
-type Reading = { recorded_at: string; volt: number; rotate: number; pressure: number; vibration: number };
-type Overview = { machine: Machine; summary: { errors: number; failures: number; maintenance: number; potentially_exposed_wafers: number }; telemetry: { readings: Reading[]; truncated: boolean; limit: number }; timeline: Event[]; wafers: Wafer[] };
-type History = { wafer: { wafer_id: string; lot_id: string }; steps: { processing_id: string; machine_id: number; operator_name: string; process_start: string; process_end: string; status: string; potentially_exposed: number }[] };
-type AI = { answer: string; evidence: { source_type: string; source_id: string; origin: string; timestamp?: string; machine_id?: number }[]; uncertainty: string[]; exposure_findings: { wafer_id: string; processing_id: string; source_events: { source_type: string; source_id: string }[] }[]; tool_use: { name: string; status: string; count?: number; count_unit?: string; truncated?: boolean; error?: string }[] };
-const metrics = [{ key: "volt", name: "Voltage", unit: "unit unspecified", color: "#2b789e" }, { key: "rotate", name: "Rotation", unit: "unit unspecified", color: "#338371" }, { key: "pressure", name: "Pressure", unit: "unit unspecified", color: "#ad7744" }, { key: "vibration", name: "Vibration", unit: "unit unspecified", color: "#796da5" }] as const;
+type Event = {
+  source_type: string;
+  source_id: number;
+  recorded_at: string;
+  detail: string;
+};
+type Wafer = {
+  processing_id: string;
+  wafer_id: string;
+  lot_id: string;
+  process_start: string;
+  process_end: string;
+  potential_exposure_status: string;
+  overlapping_source_events: Event[];
+};
+type Reading = {
+  recorded_at: string;
+  volt: number;
+  rotate: number;
+  pressure: number;
+  vibration: number;
+};
+type Overview = {
+  machine: Machine;
+  summary: {
+    errors: number;
+    failures: number;
+    maintenance: number;
+    potentially_exposed_wafers: number;
+  };
+  telemetry: { readings: Reading[]; truncated: boolean; limit: number };
+  timeline: Event[];
+  wafers: Wafer[];
+};
+type History = {
+  wafer: { wafer_id: string; lot_id: string };
+  steps: {
+    processing_id: string;
+    machine_id: number;
+    operator_name: string;
+    process_start: string;
+    process_end: string;
+    status: string;
+    potentially_exposed: number;
+  }[];
+};
+type AI = {
+  answer: string;
+  evidence: {
+    source_type: string;
+    source_id: string;
+    origin: string;
+    timestamp?: string;
+    machine_id?: number;
+  }[];
+  uncertainty: string[];
+  exposure_findings: {
+    wafer_id: string;
+    processing_id: string;
+    source_events: { source_type: string; source_id: string }[];
+  }[];
+  tool_use: {
+    name: string;
+    status: string;
+    count?: number;
+    count_unit?: string;
+    truncated?: boolean;
+    error?: string;
+  }[];
+};
+const metrics = [
+  { key: "volt", name: "Voltage", unit: "unit unspecified", color: "#2b789e" },
+  {
+    key: "rotate",
+    name: "Rotation",
+    unit: "unit unspecified",
+    color: "#338371",
+  },
+  {
+    key: "pressure",
+    name: "Pressure",
+    unit: "unit unspecified",
+    color: "#ad7744",
+  },
+  {
+    key: "vibration",
+    name: "Vibration",
+    unit: "unit unspecified",
+    color: "#796da5",
+  },
+] as const;
 const shown = (s: string) => s.replace("T", " ");
-async function load<T>(url: string, options?: RequestInit): Promise<T> { const r = await fetch(url, options); const d = await r.json(); if (!r.ok) throw new Error(d.error || `Request failed: ${r.status}`); return d; }
-function Chart({ readings, metric }: { readings: Reading[]; metric: typeof metrics[number] }) {
-  if (!readings.length) return <p className="empty">No telemetry readings in this window.</p>;
-  const values = readings.map(r => r[metric.key]), min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
-  const points = values.map((v, i) => `${32 + i * 456 / Math.max(1, values.length - 1)},${110 - (v - min) * 78 / spread}`).join(" ");
-  return <><svg viewBox="0 0 520 130" preserveAspectRatio="none" role="img" aria-label={`${metric.name} readings from ${shown(readings[0].recorded_at)} to ${shown(readings.at(-1)!.recorded_at)}`}><path d="M32 32H488 M32 71H488 M32 110H488" stroke="#e6ebec"/><polyline points={points} fill="none" stroke={metric.color} strokeWidth="2.5" vectorEffect="non-scaling-stroke"/>{values.length === 1 && <circle cx="32" cy="110" r="4" fill={metric.color}/>}</svg><div className="chart-scale"><span>{min.toFixed(1)}–{max.toFixed(1)} {metric.unit === "unit unspecified" ? "" : metric.unit}</span><span>{shown(readings[0].recorded_at)} → {shown(readings.at(-1)!.recorded_at)}</span></div></>;
+async function load<T>(url: string, options?: RequestInit): Promise<T> {
+  const r = await fetch(url, options);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || `Request failed: ${r.status}`);
+  return d;
+}
+function Chart({
+  readings,
+  metric,
+}: {
+  readings: Reading[];
+  metric: (typeof metrics)[number];
+}) {
+  if (!readings.length)
+    return <p className="empty">No telemetry readings in this window.</p>;
+  const values = readings.map((r) => r[metric.key]),
+    min = Math.min(...values),
+    max = Math.max(...values),
+    spread = max - min || 1;
+  const points = values
+    .map(
+      (v, i) =>
+        `${32 + (i * 456) / Math.max(1, values.length - 1)},${110 - ((v - min) * 78) / spread}`,
+    )
+    .join(" ");
+  return (
+    <>
+      <svg
+        viewBox="0 0 520 130"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`${metric.name} readings from ${shown(readings[0].recorded_at)} to ${shown(readings.at(-1)!.recorded_at)}`}
+      >
+        <path d="M32 32H488 M32 71H488 M32 110H488" stroke="#e6ebec" />
+        <polyline
+          points={points}
+          fill="none"
+          stroke={metric.color}
+          strokeWidth="2.5"
+          vectorEffect="non-scaling-stroke"
+        />
+        {values.length === 1 && (
+          <circle cx="32" cy="110" r="4" fill={metric.color} />
+        )}
+      </svg>
+      <div className="chart-scale">
+        <span>
+          {min.toFixed(1)}–{max.toFixed(1)}{" "}
+          {metric.unit === "unit unspecified" ? "" : metric.unit}
+        </span>
+        <span>
+          {shown(readings[0].recorded_at)} →{" "}
+          {shown(readings.at(-1)!.recorded_at)}
+        </span>
+      </div>
+    </>
+  );
 }
 export default function Home() {
-  const [machines, setMachines] = useState<Machine[]>([]), [machineId, setMachineId] = useState(1);
-  const [start, setStart] = useState("2015-01-03T06:30:00"), [end, setEnd] = useState("2015-01-03T08:00:00");
-  const [overview, setOverview] = useState<Overview | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState("");
-  const [waferId, setWaferId] = useState(""), [history, setHistory] = useState<History | null>(null), [historyError, setHistoryError] = useState("");
-  const [question, setQuestion] = useState(""), [ai, setAi] = useState<AI | null>(null), [aiLoading, setAiLoading] = useState(false), [aiError, setAiError] = useState("");
-  useEffect(() => { load<{ machines: Machine[] }>("/api/dashboard/machines").then(d => setMachines(d.machines)).catch(e => setError(e.message)); }, []);
-  useEffect(() => { const c = new AbortController(); setLoading(true); setError(""); setOverview(null); setWaferId(""); setAi(null); const q = new URLSearchParams({ machineId: String(machineId), startTime: dashboardTimestamp(start), endTime: dashboardTimestamp(end) }); load<Overview>(`/api/dashboard/overview?${q}`, { signal: c.signal }).then(setOverview).catch(e => { if (e.name !== "AbortError") setError(e.message); }).finally(() => { if (!c.signal.aborted) setLoading(false); }); return () => c.abort(); }, [machineId, start, end]);
-  useEffect(() => { if (!waferId) return; const c = new AbortController(); setHistory(null); setHistoryError(""); load<History>(`/api/dashboard/wafers/${encodeURIComponent(waferId)}`, { signal: c.signal }).then(setHistory).catch(e => { if (e.name !== "AbortError") setHistoryError(e.message); }); return () => c.abort(); }, [waferId]);
-  async function investigate() { setAiLoading(true); setAiError(""); setAi(null); const prompt = question.trim() || `For Machine ${machineId} between ${dashboardTimestamp(start)} and ${dashboardTimestamp(end)}, explain recorded events and identify potentially exposed wafers.`; try { setAi(await load<AI>("/api/investigate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: prompt }) })); } catch (e) { setAiError(e instanceof Error ? e.message : "Investigation failed"); } finally { setAiLoading(false); } }
-  return <main className="app-shell"><header className="topbar"><div className="brand">Process<span>IQ</span><small> / INVESTIGATION WORKSPACE</small></div><div className="top-status"><i/> LOCAL DATA · READ ONLY</div></header>
-    <section className="intro"><div><p className="eyebrow">EQUIPMENT INTELLIGENCE / 01</p><h1>Investigate an equipment window</h1><p>Trace machine signals and events to potentially exposed synthetic wafers.</p></div><aside><strong>Data provenance</strong><span>Machine records: Azure predictive maintenance sample</span><span>Lots, wafers, processing, notes: synthetic</span></aside></section>
-    <section className="filters" aria-label="Investigation filters"><label>Machine<select value={machineId} onChange={e => setMachineId(Number(e.target.value))}>{machines.length ? machines.map(m => <option key={m.machine_id} value={m.machine_id}>Machine {m.machine_id} · {m.model}</option>) : <option value={1}>Machine 1</option>}</select></label><label>Start · source time<input type="datetime-local" step="1" value={start} onChange={e => setStart(e.target.value)}/></label><label>End · source time<input type="datetime-local" step="1" value={end} onChange={e => setEnd(e.target.value)}/></label><p>Start inclusive · End exclusive · Source timezone unspecified</p></section>
-    {loading && <div className="notice" role="status">Loading equipment and wafer records…</div>}{error && <div className="notice error" role="alert">{error}</div>}
-    {overview && <><section className="stats" aria-label="Window summary">{[["Errors", overview.summary.errors], ["Failures", overview.summary.failures], ["Maintenance", overview.summary.maintenance], ["Potentially exposed wafers", overview.summary.potentially_exposed_wafers]].map(([label, value]) => <div className="stat" key={label}><span>{label}</span><strong>{value}</strong></div>)}</section>
-      <section className="section"><div className="section-head"><div><p className="eyebrow">01 / SOURCE MACHINE DATA</p><h2>Telemetry</h2></div><span>{overview.telemetry.readings.length} readings</span></div>{overview.telemetry.truncated && <p className="notice">Showing first {overview.telemetry.limit} readings.</p>}<div className="charts">{metrics.map(m => <div className="chart" key={m.key}><div className="chart-head"><h3>{m.name}</h3><span>{m.unit}</span></div><Chart readings={overview.telemetry.readings} metric={m}/></div>)}</div></section>
-      <div className="columns"><section className="section"><div className="section-head"><div><p className="eyebrow">02 / SOURCE MACHINE DATA</p><h2>Event timeline</h2></div><span>{overview.timeline.length} events</span></div>{overview.timeline.length ? <ol className="timeline">{overview.timeline.map(e => <li key={`${e.source_type}-${e.source_id}`}><time>{shown(e.recorded_at)}</time><div><span className={`tag ${e.source_type}`}>{e.source_type}</span><strong>{e.detail}</strong><small>{e.source_type} #{e.source_id} · original machine record</small></div></li>)}</ol> : <p className="empty">No source errors, failures, or maintenance events in this window.</p>}</section>
-      <section className="section"><div className="section-head"><div><p className="eyebrow">03 / SYNTHETIC MANUFACTURING</p><h2>Processing overlap</h2></div><span>{overview.wafers.length} records</span></div><p className="section-note">Potential exposure means a source error or failure occurred during a synthetic processing step in this window. It does not establish a defect.</p><div className="table-scroll"><table><thead><tr><th>Wafer / lot</th><th>Processing window</th><th>Source events</th><th>Classification</th></tr></thead><tbody>{overview.wafers.map(w => <tr key={w.processing_id}><td><button className="link-button" onClick={() => setWaferId(w.wafer_id)}>{w.wafer_id}</button><small>{w.lot_id}</small></td><td>{shown(w.process_start)}<small>to {shown(w.process_end)}</small></td><td>{w.overlapping_source_events.length ? w.overlapping_source_events.map(e => `${e.source_type} #${e.source_id}`).join(", ") : "—"}</td><td><span className={`classification ${w.potential_exposure_status === "potentially_exposed" ? "potential" : "clear"}`}>{w.potential_exposure_status === "potentially_exposed" ? "Potential exposure" : "No source event in overlap"}</span></td></tr>)}</tbody></table></div>{!overview.wafers.length && <p className="empty">No synthetic wafer processing overlaps this machine window.</p>}</section></div>
-      <section className="section ai-panel"><div className="section-head"><div><p className="eyebrow">04 / AI INVESTIGATION</p><h2>Ask ProcessIQ</h2></div><span>Runs only when requested</span></div><p className="section-note">The agent uses read-only investigation tools. Review cited records and uncertainty before drawing conclusions.</p><label htmlFor="question">Question</label><textarea id="question" rows={3} value={question} onChange={e => setQuestion(e.target.value)} placeholder={`For Machine ${machineId} between ${start} and ${end}, explain recorded events and identify potentially exposed wafers.`}/><button className="primary-button" disabled={aiLoading || (!!question.trim() && question.trim().length < 3)} onClick={investigate}>{aiLoading ? "Investigating…" : "Investigate"}</button>{aiError && <p className="notice error" role="alert">{aiError}</p>}
-      {ai && <div className="ai-result"><h3>Answer</h3><p>{ai.answer}</p><div className="result-grid"><div><h3>Linked evidence</h3>{ai.evidence.length ? <ul>{ai.evidence.map((e, i) => <li key={i}><strong>{e.source_type} #{e.source_id}</strong><small>{e.origin === "original_machine" ? "Original machine" : "Synthetic manufacturing"}{e.timestamp ? ` · ${shown(e.timestamp)}` : ""}{e.machine_id ? ` · Machine ${e.machine_id}` : ""}</small></li>)}</ul> : <p className="empty">No evidence records returned.</p>}</div><div><h3>Exposure findings</h3>{ai.exposure_findings.length ? <ul>{ai.exposure_findings.map(f => <li key={f.processing_id}><button className="link-button" onClick={() => setWaferId(f.wafer_id)}>{f.wafer_id}</button><small>{f.processing_id} · {f.source_events.map(e => `${e.source_type} #${e.source_id}`).join(", ")}</small><small>Potential exposure only</small></li>)}</ul> : <p className="empty">No structured exposure findings.</p>}</div><div><h3>Uncertainty</h3>{ai.uncertainty.length ? <ul>{ai.uncertainty.map((u, i) => <li key={i}>{u}</li>)}</ul> : <p className="empty">None stated.</p>}</div><div><h3>Tool use</h3>{ai.tool_use.length ? <ul>{ai.tool_use.map((t, i) => <li key={i}><strong>{t.name}</strong><small>{t.status} · {t.count ?? 0} {t.count_unit ?? "records"}{t.truncated ? " · truncated" : ""}{t.error ? ` · ${t.error}` : ""}</small></li>)}</ul> : <p className="empty">No tool calls recorded.</p>}</div></div></div>}</section></>}
-    {waferId && <div className="backdrop" onClick={() => setWaferId("")}><section className="detail" role="dialog" aria-modal="true" aria-label={`Wafer ${waferId} history`} onClick={e => e.stopPropagation()}><div className="section-head"><div><p className="eyebrow">SYNTHETIC WAFER HISTORY</p><h2>{waferId}</h2></div><button className="close" onClick={() => setWaferId("")} aria-label="Close wafer history">×</button></div>{historyError && <p className="notice error">{historyError}</p>}{!history && !historyError && <p className="empty">Loading processing history…</p>}{history && <><p className="section-note">Lot {history.wafer.lot_id} · {history.steps.length} machine steps · Synthetic records</p><ol className="steps">{history.steps.map((s, i) => <li key={s.processing_id}><span>{String(i + 1).padStart(2, "0")}</span><div><strong>Machine {s.machine_id}</strong><small>{s.processing_id} · {s.status}</small><p>{shown(s.process_start)} → {shown(s.process_end)}</p><small>Operator: {s.operator_name} · Generated exposure flag: {s.potentially_exposed ? "potential" : "none"}</small></div></li>)}</ol></>}</section></div>}
-    <footer>ProcessIQ · Source times have no declared timezone · Potential exposure is not a confirmed quality outcome</footer></main>;
+  const [machines, setMachines] = useState<Machine[]>([]),
+    [machineId, setMachineId] = useState(1);
+  const [start, setStart] = useState("2015-01-03T06:30:00"),
+    [end, setEnd] = useState("2015-01-03T08:00:00");
+  const [overview, setOverview] = useState<Overview | null>(null),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState("");
+  const [waferId, setWaferId] = useState(""),
+    [history, setHistory] = useState<History | null>(null),
+    [historyError, setHistoryError] = useState("");
+  const [question, setQuestion] = useState(""),
+    [ai, setAi] = useState<AI | null>(null),
+    [aiLoading, setAiLoading] = useState(false),
+    [aiError, setAiError] = useState("");
+  useEffect(() => {
+    load<{ machines: Machine[] }>("/api/dashboard/machines")
+      .then((d) => setMachines(d.machines))
+      .catch((e) => setError(e.message));
+  }, []);
+  useEffect(() => {
+    const c = new AbortController();
+    setLoading(true);
+    setError("");
+    setOverview(null);
+    setWaferId("");
+    setAi(null);
+    const q = new URLSearchParams({
+      machineId: String(machineId),
+      startTime: dashboardTimestamp(start),
+      endTime: dashboardTimestamp(end),
+    });
+    load<Overview>(`/api/dashboard/overview?${q}`, { signal: c.signal })
+      .then(setOverview)
+      .catch((e) => {
+        if (e.name !== "AbortError") setError(e.message);
+      })
+      .finally(() => {
+        if (!c.signal.aborted) setLoading(false);
+      });
+    return () => c.abort();
+  }, [machineId, start, end]);
+  useEffect(() => {
+    if (!waferId) return;
+    const c = new AbortController();
+    setHistory(null);
+    setHistoryError("");
+    load<History>(`/api/dashboard/wafers/${encodeURIComponent(waferId)}`, {
+      signal: c.signal,
+    })
+      .then(setHistory)
+      .catch((e) => {
+        if (e.name !== "AbortError") setHistoryError(e.message);
+      });
+    return () => c.abort();
+  }, [waferId]);
+  async function investigate() {
+    setAiLoading(true);
+    setAiError("");
+    setAi(null);
+    const prompt =
+      question.trim() ||
+      `For Machine ${machineId} between ${dashboardTimestamp(start)} and ${dashboardTimestamp(end)}, explain recorded events and identify potentially exposed wafers.`;
+    try {
+      setAi(
+        await load<AI>("/api/investigate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: prompt }),
+        }),
+      );
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Investigation failed");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          Process<span>IQ</span>
+          <small> / INVESTIGATION WORKSPACE</small>
+        </div>
+        <div className="top-status">
+          <i /> LOCAL DATA · READ ONLY
+        </div>
+      </header>
+      <section className="intro">
+        <div>
+          <p className="eyebrow">EQUIPMENT INTELLIGENCE / 01</p>
+          <h1>Investigate an equipment window</h1>
+          <p>
+            Trace machine signals and events to potentially exposed synthetic
+            wafers.
+          </p>
+        </div>
+        <aside>
+          <strong>Data provenance</strong>
+          <span>Machine records: Azure predictive maintenance sample</span>
+          <span>Lots, wafers, processing, notes: synthetic</span>
+        </aside>
+      </section>
+      <section className="filters" aria-label="Investigation filters">
+        <label>
+          Machine
+          <select
+            value={machineId}
+            onChange={(e) => setMachineId(Number(e.target.value))}
+          >
+            {machines.length ? (
+              machines.map((m) => (
+                <option key={m.machine_id} value={m.machine_id}>
+                  Machine {m.machine_id} · {m.model}
+                </option>
+              ))
+            ) : (
+              <option value={1}>Machine 1</option>
+            )}
+          </select>
+        </label>
+        <label>
+          Start · source time
+          <input
+            type="datetime-local"
+            step="1"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+          />
+        </label>
+        <label>
+          End · source time
+          <input
+            type="datetime-local"
+            step="1"
+            value={end}
+            onChange={(e) => setEnd(e.target.value)}
+          />
+        </label>
+        <p>Start inclusive · End exclusive · Source timezone unspecified</p>
+      </section>
+      {loading && (
+        <div className="notice" role="status">
+          Loading equipment and wafer records…
+        </div>
+      )}
+      {error && (
+        <div className="notice error" role="alert">
+          {error}
+        </div>
+      )}
+      {overview && (
+        <>
+          <section className="stats" aria-label="Window summary">
+            {[
+              ["Errors", overview.summary.errors],
+              ["Failures", overview.summary.failures],
+              ["Maintenance", overview.summary.maintenance],
+              [
+                "Potentially exposed wafers",
+                overview.summary.potentially_exposed_wafers,
+              ],
+            ].map(([label, value]) => (
+              <div className="stat" key={label}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </section>
+          <section className="section">
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">01 / SOURCE MACHINE DATA</p>
+                <h2>Telemetry</h2>
+              </div>
+              <span>{overview.telemetry.readings.length} readings</span>
+            </div>
+            {overview.telemetry.truncated && (
+              <p className="notice">
+                Showing first {overview.telemetry.limit} readings.
+              </p>
+            )}
+            <div className="charts">
+              {metrics.map((m) => (
+                <div className="chart" key={m.key}>
+                  <div className="chart-head">
+                    <h3>{m.name}</h3>
+                    <span>{m.unit}</span>
+                  </div>
+                  <Chart readings={overview.telemetry.readings} metric={m} />
+                </div>
+              ))}
+            </div>
+          </section>
+          <div className="columns">
+            <section className="section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">02 / SOURCE MACHINE DATA</p>
+                  <h2>Event timeline</h2>
+                </div>
+                <span>{overview.timeline.length} events</span>
+              </div>
+              {overview.timeline.length ? (
+                <ol className="timeline">
+                  {overview.timeline.map((e) => (
+                    <li key={`${e.source_type}-${e.source_id}`}>
+                      <time>{shown(e.recorded_at)}</time>
+                      <div>
+                        <span className={`tag ${e.source_type}`}>
+                          {e.source_type}
+                        </span>
+                        <strong>{e.detail}</strong>
+                        <small>
+                          {e.source_type} #{e.source_id} · original machine
+                          record
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="empty">
+                  No source errors, failures, or maintenance events in this
+                  window.
+                </p>
+              )}
+            </section>
+            <section className="section">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">03 / SYNTHETIC MANUFACTURING</p>
+                  <h2>Processing overlap</h2>
+                </div>
+                <span>{overview.wafers.length} records</span>
+              </div>
+              <p className="section-note">
+                Potential exposure means a source error or failure occurred
+                during a synthetic processing step in this window. It does not
+                establish a defect.
+              </p>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Wafer / lot</th>
+                      <th>Processing window</th>
+                      <th>Source events</th>
+                      <th>Classification</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overview.wafers.map((w) => (
+                      <tr key={w.processing_id}>
+                        <td>
+                          <button
+                            className="link-button"
+                            onClick={() => setWaferId(w.wafer_id)}
+                          >
+                            {w.wafer_id}
+                          </button>
+                          <small>{w.lot_id}</small>
+                        </td>
+                        <td>
+                          {shown(w.process_start)}
+                          <small>to {shown(w.process_end)}</small>
+                        </td>
+                        <td>
+                          {w.overlapping_source_events.length
+                            ? w.overlapping_source_events
+                                .map((e) => `${e.source_type} #${e.source_id}`)
+                                .join(", ")
+                            : "—"}
+                        </td>
+                        <td>
+                          <span
+                            className={`classification ${w.potential_exposure_status === "potentially_exposed" ? "potential" : "clear"}`}
+                          >
+                            {w.potential_exposure_status ===
+                            "potentially_exposed"
+                              ? "Potential exposure"
+                              : "No source event in overlap"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {!overview.wafers.length && (
+                <p className="empty">
+                  No synthetic wafer processing overlaps this machine window.
+                </p>
+              )}
+            </section>
+          </div>
+          <section className="section ai-panel">
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">04 / AI INVESTIGATION</p>
+                <h2>Ask ProcessIQ</h2>
+              </div>
+              <span>Runs only when requested</span>
+            </div>
+            <p className="section-note">
+              The agent uses read-only investigation tools. Review cited records
+              and uncertainty before drawing conclusions.
+            </p>
+            <label htmlFor="question">Question</label>
+            <textarea
+              id="question"
+              rows={3}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder={`For Machine ${machineId} between ${start} and ${end}, explain recorded events and identify potentially exposed wafers.`}
+            />
+            <button
+              className="primary-button"
+              disabled={
+                aiLoading || (!!question.trim() && question.trim().length < 3)
+              }
+              onClick={investigate}
+            >
+              {aiLoading ? "Investigating…" : "Investigate"}
+            </button>
+            {aiError && (
+              <p className="notice error" role="alert">
+                {aiError}
+              </p>
+            )}
+            {ai && (
+              <div className="ai-result">
+                <h3>Answer</h3>
+                <p>{ai.answer}</p>
+                <div className="result-grid">
+                  <div>
+                    <h3>Linked evidence</h3>
+                    {ai.evidence.length ? (
+                      <ul>
+                        {ai.evidence.map((e, i) => (
+                          <li key={i}>
+                            <strong>
+                              {e.source_type} #{e.source_id}
+                            </strong>
+                            <small>
+                              {e.origin === "original_machine"
+                                ? "Original machine"
+                                : "Synthetic manufacturing"}
+                              {e.timestamp ? ` · ${shown(e.timestamp)}` : ""}
+                              {e.machine_id ? ` · Machine ${e.machine_id}` : ""}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty">No evidence records returned.</p>
+                    )}
+                  </div>
+                  <div>
+                    <h3>Exposure findings</h3>
+                    {ai.exposure_findings.length ? (
+                      <ul>
+                        {ai.exposure_findings.map((f) => (
+                          <li key={f.processing_id}>
+                            <button
+                              className="link-button"
+                              onClick={() => setWaferId(f.wafer_id)}
+                            >
+                              {f.wafer_id}
+                            </button>
+                            <small>
+                              {f.processing_id} ·{" "}
+                              {f.source_events
+                                .map((e) => `${e.source_type} #${e.source_id}`)
+                                .join(", ")}
+                            </small>
+                            <small>Potential exposure only</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty">No structured exposure findings.</p>
+                    )}
+                  </div>
+                  <div>
+                    <h3>Uncertainty</h3>
+                    {ai.uncertainty.length ? (
+                      <ul>
+                        {ai.uncertainty.map((u, i) => (
+                          <li key={i}>{u}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty">None stated.</p>
+                    )}
+                  </div>
+                  <div>
+                    <h3>Tool use</h3>
+                    {ai.tool_use.length ? (
+                      <ul>
+                        {ai.tool_use.map((t, i) => (
+                          <li key={i}>
+                            <strong>{t.name}</strong>
+                            <small>
+                              {t.status} · {t.count ?? 0}{" "}
+                              {t.count_unit ?? "records"}
+                              {t.truncated ? " · truncated" : ""}
+                              {t.error ? ` · ${t.error}` : ""}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty">No tool calls recorded.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+      {waferId && (
+        <div className="backdrop" onClick={() => setWaferId("")}>
+          <section
+            className="detail"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Wafer ${waferId} history`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="section-head">
+              <div>
+                <p className="eyebrow">SYNTHETIC WAFER HISTORY</p>
+                <h2>{waferId}</h2>
+              </div>
+              <button
+                className="close"
+                onClick={() => setWaferId("")}
+                aria-label="Close wafer history"
+              >
+                ×
+              </button>
+            </div>
+            {historyError && <p className="notice error">{historyError}</p>}
+            {!history && !historyError && (
+              <p className="empty">Loading processing history…</p>
+            )}
+            {history && (
+              <>
+                <p className="section-note">
+                  Lot {history.wafer.lot_id} · {history.steps.length} machine
+                  steps · Synthetic records
+                </p>
+                <ol className="steps">
+                  {history.steps.map((s, i) => (
+                    <li key={s.processing_id}>
+                      <span>{String(i + 1).padStart(2, "0")}</span>
+                      <div>
+                        <strong>Machine {s.machine_id}</strong>
+                        <small>
+                          {s.processing_id} · {s.status}
+                        </small>
+                        <p>
+                          {shown(s.process_start)} → {shown(s.process_end)}
+                        </p>
+                        <small>
+                          Operator: {s.operator_name} · Generated exposure flag:{" "}
+                          {s.potentially_exposed ? "potential" : "none"}
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+      <footer>
+        ProcessIQ · Source times have no declared timezone · Potential exposure
+        is not a confirmed quality outcome
+      </footer>
+    </main>
+  );
 }

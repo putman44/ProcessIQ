@@ -6,7 +6,9 @@ export const metadata: Metadata = {
   description: "Evidence-backed manufacturing incident investigation.",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body>{children}</body>
