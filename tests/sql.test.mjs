@@ -57,3 +57,19 @@ liveTest("SQL agent counts manufacturing lots", async () => {
     "Expected 500 synthetic manufacturing lots",
   );
 });
+
+liveTest("SQL agent checks whether Machine 999 exists", async () => {
+  const result = await runSql(
+    "What errors occurred on Machine 999 on January 3, 2015?",
+  );
+
+  console.log("\nMachine 999 SQL result:\n", result);
+
+  // Verify the machine lookup.
+  assert.match(result, /Machine lookup: machine_id=999, exists=false/);
+
+  // Verify that there are no matching error records.
+  const rows = JSON.parse(result.split("Rows:\n")[1]);
+
+  assert.equal(rows.length, 0);
+});

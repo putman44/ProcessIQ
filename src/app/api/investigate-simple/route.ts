@@ -1,4 +1,4 @@
-// import { aggregate } from "@/lib/agents/aggregator";
+import { aggregate } from "@/lib/agents/aggregator";
 import { select } from "@/lib/agents/selector";
 import { runSql } from "@/lib/agents/sql";
 import { z } from "zod";
@@ -33,10 +33,7 @@ export async function POST(request: Request) {
     // Step 3: Generate the final answer
     // return aggregate(query, sqlResults).toTextStreamResponse();
 
-    return Response.json({
-      plan,
-      sqlResults,
-    });
+    return aggregate(query, messages, sqlResults).toTextStreamResponse();
   } catch (error) {
     if (error instanceof z.ZodError) {
       return new Response("Invalid chat request.", {

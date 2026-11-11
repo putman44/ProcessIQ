@@ -180,6 +180,14 @@ Rules:
   ORDER BY process_start ASC.
 - Do not require ORDER BY for aggregate COUNT queries.
 
+- When investigating a specific machine ID, verify whether
+  that machine exists in the machines table.
+- For event-listing queries, include a machine_exists field
+  using EXISTS and a LEFT JOIN so that a result is returned
+  even if the machine has no matching events.
+- Do not treat an unknown machine as an existing machine
+  with zero errors.
+
 ${DATABASE_SCHEMA}
 
 Values present in the database:
@@ -230,9 +238,26 @@ ${grounding}
       rows.push(row);
     }
 
+    // Check whether an explicitly requested machine exists.
+    const match = query.match(/\bmachine\s+#?(\d+)\b/i);
+
+    let machineLookup = "";
+
+    if (match) {
+      const machineId = Number(match[1]);
+
+      const found = db
+        .prepare("SELECT 1 FROM machines WHERE machine_id = ?")
+        .get(machineId);
+
+      machineLookup = `Machine lookup: machine_id=${machineId}, exists=${Boolean(found)}`;
+    }
+
     // Step 7: Return text for the aggregator.
+
     return [
       `SQL executed: ${statement}`,
+      ...(machineLookup ? [machineLookup] : []),
       `Rows truncated: ${truncated}`,
       `Rows:\n${stringifyRows(rows)}`,
     ].join("\n\n");
